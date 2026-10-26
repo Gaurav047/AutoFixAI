@@ -13,3 +13,4 @@ frontend/dist/
 *.mp4
 workPage.png
 docs/*.pdf
+!docs/devpost.pdf
