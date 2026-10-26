@@ -7,6 +7,8 @@
 #   - NEBIUS_API_KEY in ../.env (Token Factory key the app uses for Nemotron)
 #
 # Usage:  ./deploy/nebius-deploy.sh            (re-run after code changes to push a new image)
+#         PROJECT_ID=project-... ./deploy/nebius-deploy.sh
+#             deploy into a specific project/region, e.g. one where the tenant has non-GPU vCPU quota
 set -euo pipefail
 
 APP=${APP:-autofixai}
@@ -17,10 +19,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NEBIUS_API_KEY=${NEBIUS_API_KEY:-$(grep -E '^NEBIUS_API_KEY=' "$ROOT/.env" | cut -d= -f2-)}
 [ -n "$NEBIUS_API_KEY" ] || { echo "NEBIUS_API_KEY not set (add it to .env)"; exit 1; }
 
+# Registry and endpoint live in the same project, so the endpoint can pull without credentials.
+nb() { nebius "$@" ${PROJECT_ID:+--parent-id "$PROJECT_ID"}; }
+
 echo "==> Container registry"
-REGISTRY_ID=$(nebius registry get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
+REGISTRY_ID=$(nb registry get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
 if [ -z "$REGISTRY_ID" ]; then
-  REGISTRY_ID=$(nebius registry create --name "$APP" --format jsonpath='{.metadata.id}')
+  REGISTRY_ID=$(nb registry create --name "$APP" --format jsonpath='{.metadata.id}')
 fi
 REGISTRY_FQDN=$(nebius registry get "$REGISTRY_ID" --format jsonpath='{.status.registry_fqdn}')
 IMAGE="$REGISTRY_FQDN/${REGISTRY_ID#registry-}/$APP:latest"
@@ -32,9 +37,9 @@ docker build --platform linux/amd64 -t "$IMAGE" "$ROOT"
 docker push "$IMAGE"
 
 echo "==> Serverless endpoint"
-ENDPOINT_ID=$(nebius ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
+ENDPOINT_ID=$(nb ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
 if [ -z "$ENDPOINT_ID" ]; then
-  nebius ai endpoint create \
+  nb ai endpoint create \
     --name "$APP" \
     --image "$IMAGE" \
     --platform "$PLATFORM" \
@@ -45,7 +50,7 @@ if [ -z "$ENDPOINT_ID" ]; then
     --env "NEBIUS_API_KEY=$NEBIUS_API_KEY" \
     --env "AUTOFIX_PUBLIC_MODE=1" \
     --env "AUTOFIX_WORKERS=2"
-  ENDPOINT_ID=$(nebius ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}')
+  ENDPOINT_ID=$(nb ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}')
 else
   echo "    Endpoint exists ($ENDPOINT_ID); new image pushed under the same tag."
   echo "    Restart the endpoint (console or CLI) so it pulls the new image."

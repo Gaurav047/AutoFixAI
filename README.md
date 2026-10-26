@@ -12,6 +12,8 @@ AutoFixAI is an autonomous CI-repair agent. Point it at a repository with failin
 
 A team of **NVIDIA Nemotron** models does the work, served by **Nebius Token Factory**.
 
+**Live demo:** https://port8000-rfxnxvz92vqyz42.tunnel.applications.eu-south1.nebius.cloud (hosted on Nebius Serverless Endpoints; click a demo repo to watch a live run)
+
 > Track: **Coding and Agentic Engineering**: an agent that writes, runs and tests code on Token Factory.
 
 ---
@@ -166,6 +168,9 @@ docker run -p 8000:8000 --env-file .env -e AUTOFIX_PUBLIC_MODE=1 autofixai
 ```bash
 # Linux, macOS or WSL, with the Nebius CLI logged in (nebius profile create) and Docker running
 ./deploy/nebius-deploy.sh
+
+# Deploy into a specific project/region (e.g. where your tenant has CPU quota)
+PROJECT_ID=project-... ./deploy/nebius-deploy.sh
 ```
 
 Public mode limits the hosted demo to the bundled example repositories, so strangers can't make your server run arbitrary code. Re-run the script after code changes to push a new image, then restart the endpoint.
