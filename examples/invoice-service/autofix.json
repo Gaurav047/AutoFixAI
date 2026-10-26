@@ -1,0 +1,1 @@
+{"name": "Invoice service", "language": "Python", "test_command": "python -m pytest -q", "description": "A billing module whose totals drift by a few cents after a refactor applied tax before the discount and rounded line by line."}

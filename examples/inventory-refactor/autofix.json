@@ -1,0 +1,1 @@
+{"name": "Inventory refactor", "language": "Python", "test_command": "python -m pytest -q", "description": "A half-finished refactor across three modules: a renamed field and a reordered pricing signature break the order service."}

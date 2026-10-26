@@ -1,0 +1,1 @@
+{"name": "API rate limiter", "language": "Python", "test_command": "python -m pytest -q", "description": "A token-bucket limiter that lets bursts through after idle periods and throttles fractional refills, so production traffic gets 429s."}

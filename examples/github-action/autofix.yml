@@ -1,0 +1,44 @@
+# Drop this file into .github/workflows/ of any repository.
+# When the "CI" workflow fails on a branch, AutoFixAI checks out that branch,
+# fixes the failing tests with NVIDIA Nemotron on Nebius Token Factory,
+# verifies the fix, and opens a pull request against the failing branch.
+#
+# Required repository secret: NEBIUS_API_KEY   (optional: TAVILY_API_KEY)
+name: AutoFixAI
+on:
+  workflow_run:
+    workflows: ["CI"]          # name of the workflow to watch
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autofix:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      !startsWith(github.event.workflow_run.head_branch, 'autofix/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install AutoFixAI
+        run: |
+          git clone --depth 1 https://github.com/Gaurav047/AutoFixAI /tmp/autofix
+          pip install -r /tmp/autofix/backend/requirements.txt
+      - name: Install project dependencies
+        run: |
+          git clone --depth 1 --branch "${{ github.event.workflow_run.head_branch }}" \
+            "https://github.com/${{ github.repository }}" /tmp/target
+          if [ -f /tmp/target/requirements.txt ]; then pip install -r /tmp/target/requirements.txt; fi
+      - name: Fix, verify and open a PR
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: /tmp/autofix/backend
+        run: |
+          python -m autofix fix "https://github.com/${{ github.repository }}" \
+            --ref "${{ github.event.workflow_run.head_branch }}" \
+            --test "python -m pytest -q" --pr
