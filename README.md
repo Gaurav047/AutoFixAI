@@ -223,21 +223,54 @@ All of it. AutoFixAI was started from an empty repository during the hackathon.
 
 ## Feedback on Nebius Token Factory and NVIDIA tools
 
-Observations from building and testing against the live API (2026-10-26):
+Everything below comes from building, testing and deploying AutoFixAI during the hackathon (October 2026). The numbers are from real runs.
 
-- **Native tool calling worked on the first try** on Nemotron 3 Super and Ultra through the OpenAI-compatible endpoint. Tool-call arguments in the agent loop were never malformed.
-- **Measured results on the three demo repos:** all fixed on the first attempt.
-  - Super: 20–31 s end to end, 6–9 calls, about 17–30k prompt tokens.
-  - Ultra (forced escalation): fixed the rate limiter in 10.5 s.
-- **Gotcha: Nano reasons by default, and the reasoning counts against `max_tokens`.** With a 1500-token cap and `response_format: json_object`, Nemotron 3 Nano returned **empty content** with `finish_reason=length`, because all 1500 tokens went to reasoning. Sending `chat_template_kwargs: {"enable_thinking": false}` produced valid JSON in 137 tokens and cut latency from 6.0 s to 1.0 s. A per-request reasoning budget, or reasoning that doesn't count toward `max_tokens`, would prevent this. So would putting this more prominently in the docs.
-- **Model ID casing is inconsistent across the catalog:** `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`, `nvidia/nemotron-3-super-120b-a12b`, `nvidia/Nemotron-3-Ultra-550b-a55b`. That makes hard-coding IDs error-prone, which is why AutoFixAI resolves them from `/v1/models`.
+### Nebius Token Factory
 
-> _Add your own notes. Suggested prompts:_
-> - _Onboarding: how long from sign-up to first successful Nemotron call?_
-> - _Function calling: how reliable was tool calling on Nano, Super and Ultra? Any malformed arguments?_
-> - _Latency and throughput per tier in the agent loop._
-> - _Model catalog: were model IDs easy to discover? Docs gaps?_
-> - _What would you want next (e.g. per-request reasoning-budget control, batch API, cost dashboard per key)?_
+**What worked well**
+- **It's a true drop-in for the OpenAI SDK.** We changed `base_url` and the API key, and the first Nemotron call worked. `tools`, `tool_choice` and `response_format: json_object` all worked without changes.
+- **`/v1/models` is a real asset.** It listed 30 models, which let AutoFixAI pick the right Nemotron for each tier at startup instead of hard-coding IDs.
+- **Latency is good enough for interactive agent loops.** A full fix (reproduce, triage, 6–9 Super calls, verify, write-up) took 17–31 s end to end.
+
+**Friction and suggestions**
+1. **Nano's reasoning silently uses up `max_tokens`.** This was the most important issue we hit.
+   - **What happened:** Nemotron 3 Nano reasons by default, and the reasoning counts against `max_tokens`. With a 1500-token cap and `response_format: json_object`, it returned **empty content** with `finish_reason=length`, because every token went to reasoning. Nothing in the response says that's what happened, so it looks like a model failure.
+   - **The fix:** `extra_body={"chat_template_kwargs": {"enable_thinking": false}}` returned valid JSON in **137 tokens** and cut latency from **6.0 s to 1.0 s**. We only found it by experimenting.
+   - **Suggestions:**
+     - (a) document the reasoning toggle prominently on every Nemotron model page,
+     - (b) offer a first-class reasoning-budget parameter,
+     - (c) when reasoning used up the budget, say so in the response, e.g. via `reasoning_tokens` in `usage` or a distinct finish reason.
+2. **Model ID casing is inconsistent across the catalog:** `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`, `nvidia/nemotron-3-super-120b-a12b`, `nvidia/Nemotron-3-Ultra-550b-a55b`. Each of the three uses a different convention, so hard-coded IDs are easy to get wrong. Consistent IDs, or case-insensitive matching, would help.
+3. **The catalog doesn't describe the models.** `/v1/models` returns only IDs. Fields like context length, tool-calling support, reasoning default and modality would let apps choose models without guessing. Here we had to rule out `Nemotron-3.5-Super-VL` by name heuristics.
+
+### NVIDIA Nemotron models
+
+- **Tool calling on Super and Ultra was reliable.** Across every real run, none of the tool-call arguments were malformed, and neither model needed our JSON-in-text fallback.
+- **Nemotron 3 Super was the right default for coding.** It fixed all three demo repos on the first attempt. One of them needed reasoning across files: a renamed field plus swapped positional arguments, where the second bug only shows up for bulk orders. It made minimal, idiomatic edits and never tried to touch tests.
+- **Nemotron 3 Ultra was fast for its size.** With forced escalation it fixed the rate-limiter bug in **10.5 s**, and its reasoning was clear enough to show users directly in the timeline.
+- **Nemotron 3 Nano works well for structured side tasks once thinking is off.** Triage JSON, reflection notes and PR write-ups were consistently well formed and specific. Its `difficulty` estimate was less reliable: on one live run it labelled a failure "hard" that Super then fixed on the first attempt. That made escalation more eager than it needed to be.
+- **The three tiers worked well together.** Nano for cheap structured calls, Super for the agent loop and Ultra only on escalation kept a typical fix to around **2k Nano tokens and 17–32k Super tokens, with no Ultra calls**.
+
+### Nebius AI Cloud: Serverless Endpoints, Container Registry and CLI
+
+**What worked well**
+- **Deploying an endpoint was quick.** One `nebius ai endpoint create` gave a running CPU endpoint with a managed HTTPS URL within minutes, and the output listed the follow-up commands (logs, restart, stop, ssh).
+- **The registry was easy to use.** `nebius registry configure-helper` meant no `docker login`, and endpoints pull from a registry in the same project with no credentials.
+- **`--format jsonpath` made scripting easy** without needing `jq`, which isn't installed on a fresh WSL Ubuntu.
+
+**Friction and suggestions**
+1. **The quota failure only appeared at the last step.**
+   - **What happened:** our default project's region (`eu-north1`) had a **non-GPU vCPU quota of 0**, while `eu-south1` had 200. We found out only at the final `endpoint create` call (`ResourceExhausted … compute.instance.non-gpu.vcpu (limit 0, requested 4)`), after we'd already created a registry and pushed a 446 MB image to the wrong region.
+   - **Suggestions:** make `--dry-run` check quota, and when a create fails on quota, name the regions where you do have it. Both would have saved a full deploy cycle.
+2. **There's no native Windows CLI.** The CLI supports only Linux and macOS, so on Windows we had to use WSL. Install docs that cover WSL, or a native Windows build, would help Windows developers.
+3. **The docs contradict themselves on token auth.** The Serverless Endpoints quickstart says an unauthenticated request with `--auth token` should fail with 401/403 in one place and return 200 in another.
+4. **Updating environment variables isn't covered.** The docs explain updating the image by pushing the same tag and restarting, but we couldn't find how to change an existing endpoint's environment variables (for example, to rotate an API key).
+
+### Suggested next features
+- A per-request reasoning budget in Token Factory, with reasoning tokens reported separately in `usage`.
+- Model metadata in `/v1/models` (context window, tool support, reasoning default).
+- Quota preflight, plus region hints, in `nebius ai endpoint create`.
+- A per-key cost breakdown in Token Factory, to compare tier routing strategies.
 
 ## License
 
