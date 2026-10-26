@@ -14,6 +14,8 @@ A team of **NVIDIA Nemotron** models does the work, served by **Nebius Token Fac
 
 **Live demo:** https://port8000-dptwsrmgxt3w28t.tunnel.applications.eu-south1.nebius.cloud (hosted on Nebius Serverless Endpoints; click a demo repo to watch a live run)
 
+**Demo video:** https://youtu.be/lTOj6GO26-8 (2:53)
+
 > Track: **Coding and Agentic Engineering**: an agent that writes, runs and tests code on Token Factory.
 
 ---
