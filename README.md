@@ -12,7 +12,7 @@ AutoFixAI is an autonomous CI-repair agent. Point it at a repository with failin
 
 A team of **NVIDIA Nemotron** models does the work, served by **Nebius Token Factory**.
 
-**Live demo:** https://port8000-rfxnxvz92vqyz42.tunnel.applications.eu-south1.nebius.cloud (hosted on Nebius Serverless Endpoints; click a demo repo to watch a live run)
+**Live demo:** https://port8000-dptwsrmgxt3w28t.tunnel.applications.eu-south1.nebius.cloud (hosted on Nebius Serverless Endpoints; click a demo repo to watch a live run)
 
 > Track: **Coding and Agentic Engineering**: an agent that writes, runs and tests code on Token Factory.
 

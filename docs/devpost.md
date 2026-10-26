@@ -7,7 +7,7 @@
 | **Project name** | AutoFixAI |
 | **Tagline** | Red build in, verified pull request out: an autonomous CI-repair agent powered by NVIDIA Nemotron on Nebius Token Factory. |
 | **Track** | Coding and Agentic Engineering |
-| **Demo URL** | https://port8000-rfxnxvz92vqyz42.tunnel.applications.eu-south1.nebius.cloud |
+| **Demo URL** | https://port8000-dptwsrmgxt3w28t.tunnel.applications.eu-south1.nebius.cloud |
 | **Code repository** | https://github.com/Gaurav047/AutoFixAI (MIT license) |
 | **Video** | _add the YouTube link_ |
 | **Existed before the submission period?** | No. Built from an empty repository during the hackathon. |
