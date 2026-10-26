@@ -516,8 +516,22 @@ function Markdown({ text }: { text: string }) {
             </div>
           );
         }
-        if (lines.every((l) => /^\s*[-*] /.test(l))) {
-          return <ul key={i}>{lines.map((l, j) => <li key={j}>{inline(l.replace(/^\s*[-*] /, ""))}</li>)}</ul>;
+        const isItem = (l: string) => /^\s*[-*] /.test(l);
+        if (lines.some(isItem) && !b.startsWith("```")) {
+          // A block can mix text lines and bullets (e.g. "Sources retrieved...:" followed by a list).
+          const groups: { list: boolean; lines: string[] }[] = [];
+          for (const l of lines) {
+            const last = groups[groups.length - 1];
+            if (last && last.list === isItem(l)) last.lines.push(l);
+            else groups.push({ list: isItem(l), lines: [l] });
+          }
+          return (
+            <div key={i}>
+              {groups.map((g, j) => g.list
+                ? <ul key={j}>{g.lines.map((l, k) => <li key={k}>{inline(l.replace(/^\s*[-*] /, ""))}</li>)}</ul>
+                : <p key={j}>{inline(g.lines.join(" "))}</p>)}
+            </div>
+          );
         }
         if (b.startsWith("```")) return <pre key={i} className="out">{b.replace(/^```\w*\n?|```$/g, "")}</pre>;
         if (/^-{3,}$/.test(b.trim())) return <hr key={i} />;
