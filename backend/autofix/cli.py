@@ -15,7 +15,7 @@ from typing import Any
 
 from .config import settings
 
-COLORS = {"stage": "\033[36m", "tool": "\033[90m", "edit": "\033[33m", "tests": "\033[35m",
+COLORS = {"research": "\033[94m", "stage": "\033[36m", "tool": "\033[90m", "edit": "\033[33m", "tests": "\033[35m",
           "error": "\033[31m", "finish": "\033[32m", "lesson": "\033[34m", "thought": "\033[37m"}
 RESET = "\033[0m"
 
@@ -35,6 +35,13 @@ def print_event(kind: str, d: dict[str, Any]) -> None:
         line = f"    triage: [{d.get('category')}] {d.get('summary')}\n    suspects: {d.get('suspect_files')}"
     elif kind == "thought":
         line = "    " + d["text"].replace("\n", "\n    ")[:600]
+    elif kind == "research":
+        if d.get("error"):
+            line = f"    tavily ({d['origin']}): search failed: {d['error']}"
+        else:
+            srcs = "\n".join(f"      - {s['title']} <{s['url']}>" for s in d.get("sources", [])[:5])
+            answer = (d.get("answer") or "")[:300]
+            line = f"    tavily ({d['origin']}): \"{d['query']}\"\n      {answer}\n{srcs}"
     elif kind == "finish":
         line = f"    root cause: {d.get('root_cause')}\n    fix: {d.get('fix_summary')}"
     elif kind in ("lesson", "attempt_failed", "blocked", "error", "pr"):

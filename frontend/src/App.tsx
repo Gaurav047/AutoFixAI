@@ -103,6 +103,7 @@ function Welcome({ health }: { health: Health | null }) {
       <ol className="how">
         <li><b>Reproduce.</b> Clone the repo into an isolated workspace and run the real test command.</li>
         <li><b>Triage.</b> Nano classifies the failure and names the files it suspects, in about a second.</li>
+        <li><b>Research.</b> When a failure points outside the repo, such as a removed API or a library change, Tavily searches the web and the sources are cited in the PR.</li>
         <li><b>Fix.</b> Super reads, searches, edits and reruns tests in a tool-calling loop.</li>
         <li><b>Escalate.</b> If Super's patch is rejected, Nano writes up what went wrong and Ultra retries from a clean tree.</li>
         <li><b>Verify &amp; ship.</b> AutoFixAI reruns the tests itself and rejects any patch that touches test files, then opens a PR.</li>
@@ -218,7 +219,7 @@ function useRunEvents(runId: string) {
 function RunView({ runId }: { runId: string }) {
   const events = useRunEvents(runId);
   const derived = useMemo(() => derive(events), [events]);
-  const { stage, tier, attempt, triage, diff, writeup, result, models, prUrl } = derived;
+  const { stage, tier, attempt, triage, research, diff, writeup, result, models, prUrl } = derived;
   const finished = !!result;
 
   return (
@@ -239,6 +240,28 @@ function RunView({ runId }: { runId: string }) {
                 {!!triage.suspect_files?.length && (
                   <div className="files">{triage.suspect_files.map((f: string) => <code key={f}>{f}</code>)}</div>
                 )}
+              </div>
+            </Card>
+          )}
+
+          {research.length > 0 && (
+            <Card title="Web research" badge={<span className="tavily-badge">Tavily</span>}>
+              <div className="research">
+                {research.map((r: any) => (
+                  <div key={r.seq} className="finding">
+                    <div className="query"><span className="tag">{r.origin === "triage" ? "after triage" : "agent search"}</span>
+                      <code>{r.query}</code></div>
+                    {r.error ? <p className="error">Search failed: {r.error}</p> : r.answer && <p>{r.answer}</p>}
+                    {!!r.sources?.length && (
+                      <ol className="sources">
+                        {r.sources.map((s: any) => (
+                          <li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a>
+                            <span className="muted small">{new URL(s.url).hostname}</span></li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                ))}
               </div>
             </Card>
           )}
@@ -287,6 +310,7 @@ function derive(events: RunEvent[]) {
   let tier: Tier | null = null;
   let attempt = 0;
   let triage: any = null;
+  const research: RunEvent[] = [];
   let diff = "";
   let writeup: any = null;
   let result: FixResult | null = null;
@@ -298,17 +322,19 @@ function derive(events: RunEvent[]) {
       if (e.tier) tier = e.tier;
       if (e.attempt) attempt = e.attempt;
     } else if (e.kind === "triage") triage = e;
+    else if (e.kind === "research") research.push(e);
     else if (e.kind === "diff") diff = e.diff;
     else if (e.kind === "writeup") writeup = e;
     else if (e.kind === "models") models = e.models;
     else if (e.kind === "pr") prUrl = e.url;
     else if (e.kind === "end") result = e.result;
   }
-  return { stage, tier, attempt, triage, diff, writeup, result, models, prUrl };
+  return { stage, tier, attempt, triage, research, diff, writeup, result, models, prUrl };
 }
 
 function Stepper({ stage, finished, status }: { stage: string; finished: boolean; status?: string }) {
-  const idx = STAGES.findIndex((s) => s.id === stage);
+  // Research happens between triage and fix; show it as part of the triage step.
+  const idx = STAGES.findIndex((s) => s.id === (stage === "research" ? "triage" : stage));
   return (
     <ol className="stepper">
       {STAGES.map((s, i) => {
@@ -369,6 +395,13 @@ function TimelineItem({ e }: { e: RunEvent }) {
   switch (e.kind) {
     case "stage":
       return <li className="ev stage">{time}<b>{e.message}</b>{e.tier && <TierBadge tier={e.tier} />}</li>;
+    case "research":
+      return (
+        <li className="ev research">{time}<span className="tavily-badge">Tavily</span>
+          <code>{e.query}</code>
+          <span className="muted">{e.error ? `failed: ${e.error}` : `${e.sources?.length ?? 0} sources`}</span>
+        </li>
+      );
     case "triage":
       return <li className="ev">{time}Triage: <span className="tag">{e.category}</span> {e.summary}</li>;
     case "thought":
@@ -433,6 +466,7 @@ function UsageTable({ usage, models, activeTier, events }: {
   const tiers: Tier[] = ["nano", "super", "ultra"];
   const used = new Set<Tier>(["nano"]);
   for (const e of events) if (e.kind === "stage" && e.tier) used.add(e.tier);
+  const searches = usage?.tavily?.searches ?? events.filter((e) => e.kind === "research").length;
   return (
     <div className="usage">
       {tiers.map((t) => {
@@ -451,6 +485,11 @@ function UsageTable({ usage, models, activeTier, events }: {
           </div>
         );
       })}
+      <div className={`usage-row tavily ${searches ? "" : "idle"}`}>
+        <div className="usage-head"><span className="tavily-badge">Tavily</span>
+          <span className="muted small">Web research for failures outside the repo</span></div>
+        <div className="usage-nums"><span><b>{searches}</b> {searches === 1 ? "search" : "searches"}</span></div>
+      </div>
     </div>
   );
 }
@@ -459,9 +498,12 @@ function Markdown({ text }: { text: string }) {
   // Minimal renderer for PR bodies: headings, bullets, inline code, paragraphs.
   const blocks = text.split(/\n{2,}/);
   const inline = (s: string) =>
-    s.split(/(`[^`]+`)/).map((part, i) =>
-      part.startsWith("`") && part.endsWith("`") ? <code key={i}>{part.slice(1, -1)}</code> : <span key={i}>{part.replace(/\*\*/g, "")}</span>,
-    );
+    s.split(/(`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/).map((part, i) => {
+      if (part.startsWith("`") && part.endsWith("`")) return <code key={i}>{part.slice(1, -1)}</code>;
+      const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      if (link) return <a key={i} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
+      return <span key={i}>{part.replace(/\*\*/g, "")}</span>;
+    });
   return (
     <div className="md">
       {blocks.map((b, i) => {

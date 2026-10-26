@@ -37,7 +37,8 @@ AutoFixAI handles that whole loop. Nothing it produces is trusted until the proj
 flowchart LR
     A[CI fails / user submits repo] --> B[Clone into isolated workspace]
     B --> C[Run test command: reproduce]
-    C --> D["Nemotron Nano<br/>triage: category, suspect files, hypothesis"]
+    C --> D["Nemotron Nano<br/>triage: category, suspect files, hypothesis, search query"]
+    D -- "failure points outside the repo" --> R["Tavily<br/>web research"] --> E
     D --> E["Nemotron Super<br/>tool-calling fix loop<br/>read · search · edit · run_tests"]
     E --> F{Independent verification<br/>tests pass AND no test files touched?}
     F -- yes --> G["Nemotron Nano<br/>PR write-up"] --> H[Branch + Pull Request]
@@ -67,8 +68,19 @@ The coding agent works through OpenAI-style function calling against Token Facto
 | `edit_file` | Exact, unique search-and-replace edits (no fuzzy patching) |
 | `write_file` | Create or overwrite a file |
 | `run_tests` | Run the configured test command in the sandbox |
-| `web_search` | *(optional, Tavily)* look up library changelogs, deprecations and error messages |
+| `web_search` | *(with a Tavily key)* look up library changelogs, deprecations and error messages |
 | `finish` | Report root cause and fix summary |
+
+### Web research with Tavily
+
+Some failures can't be understood from the repository alone: a library changed its API, or a language upgrade removed something. With `TAVILY_API_KEY` set, AutoFixAI researches these with [Tavily](https://tavily.com):
+
+1. **Triage decides when.** Nano's triage includes a `search_query` when the fix depends on facts outside the repo. AutoFixAI searches only for failures categorised as `import_error`, `dependency`, `api_change` or `config`, so logic bugs never trigger a search.
+2. **The findings go to the coding agent.** Tavily's answer and its top sources are added to the agent's starting context. The agent can also run its own searches through the `web_search` tool.
+3. **The PR cites its sources.** Every URL Tavily returned is listed under **References** in the PR. The list is built by AutoFixAI from what was retrieved, not written by a model, so it can't contain invented links.
+4. **It's visible.** The dashboard shows a Web research card (each query, Tavily's answer and the source links) and counts searches alongside model usage.
+
+Without a key, the research step is skipped and everything else works the same.
 
 ### Guardrails
 
@@ -122,13 +134,14 @@ python -m autofix fix ./my-repo --test "npm test" --ci-log failing-build.log --o
 
 ### Demo repositories
 
-`examples/` contains three small projects with realistic regressions. Each has failing tests and none ships with the fix.
+`examples/` contains four small projects with realistic regressions. Each has failing tests and none ships with the fix.
 
 | Demo | Bug | What it exercises |
 |---|---|---|
 | `inventory-refactor` | A v2 refactor renamed `Product.qty` → `stock` and reordered `bulk_price(quantity, unit_price)`; the service layer wasn't updated | Multi-file reasoning. The wrong argument order only fails for bulk orders. |
 | `invoice-service` | Tax applied before the discount and rounded per line, so totals drift by cents | Domain reasoning (money, rounding order) |
 | `rate-limiter` | Token bucket refill truncates fractional tokens and never caps at capacity | Numeric and time reasoning with a fake clock |
+| `python-upgrade` | Release tooling written for older Python breaks on 3.12+: `distutils` and `inspect.getargspec` were removed from the standard library | A failure caused by the runtime, not the code's logic. Triggers Tavily research when a key is set. The second removal only shows up after the first is fixed. |
 
 ---
 
@@ -183,7 +196,8 @@ Public mode limits the hosted demo to the bundled example repositories, so stran
 backend/autofix/
   llm.py         Token Factory client, Nemotron tier resolution, per-tier usage accounting
   agent.py       Pipeline: reproduce → triage → fix loop → verify → reflect/escalate → write-up
-  tools.py       Function-calling tool specs + dispatcher (incl. optional Tavily web search)
+  tools.py       Function-calling tool specs + dispatcher
+  research.py    Tavily web research: search client, per-run source collection, PR references
   workspace.py   Isolated workspace: path jail, edits, test runner, git diff/reset
   github.py      Branch, push, PR creation, failed-job log retrieval
   server.py      FastAPI: runs API, SSE event stream, GitHub webhook, serves the dashboard

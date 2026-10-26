@@ -9,6 +9,8 @@
 # Usage:  ./deploy/nebius-deploy.sh            (re-run after code changes to push a new image)
 #         PROJECT_ID=project-... ./deploy/nebius-deploy.sh
 #             deploy into a specific project/region, e.g. one where the tenant has non-GPU vCPU quota
+#         RECREATE=1 ./deploy/nebius-deploy.sh
+#             replace an existing endpoint so new env vars (e.g. TAVILY_API_KEY) apply; the URL changes
 set -euo pipefail
 
 APP=${APP:-autofixai}
@@ -16,7 +18,9 @@ PLATFORM=${PLATFORM:-cpu-d3}
 PRESET=${PRESET:-4vcpu-16gb}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-NEBIUS_API_KEY=${NEBIUS_API_KEY:-$(grep -E '^NEBIUS_API_KEY=' "$ROOT/.env" | cut -d= -f2-)}
+env_value() { grep -E "^$1=" "$ROOT/.env" 2>/dev/null | cut -d= -f2- || true; }
+NEBIUS_API_KEY=${NEBIUS_API_KEY:-$(env_value NEBIUS_API_KEY)}
+TAVILY_API_KEY=${TAVILY_API_KEY:-$(env_value TAVILY_API_KEY)}
 [ -n "$NEBIUS_API_KEY" ] || { echo "NEBIUS_API_KEY not set (add it to .env)"; exit 1; }
 
 # Registry and endpoint live in the same project, so the endpoint can pull without credentials.
@@ -38,6 +42,13 @@ docker push "$IMAGE"
 
 echo "==> Serverless endpoint"
 ENDPOINT_ID=$(nb ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
+# Environment variables can't be changed on an existing endpoint, so RECREATE=1 replaces it.
+# The replacement gets a new public URL.
+if [ -n "$ENDPOINT_ID" ] && [ "${RECREATE:-0}" = "1" ]; then
+  echo "    Deleting $ENDPOINT_ID to recreate it with the current environment"
+  nebius ai endpoint delete "$ENDPOINT_ID"
+  ENDPOINT_ID=""
+fi
 if [ -z "$ENDPOINT_ID" ]; then
   nb ai endpoint create \
     --name "$APP" \
@@ -48,6 +59,7 @@ if [ -z "$ENDPOINT_ID" ]; then
     --container-port 8000 \
     --auth none \
     --env "NEBIUS_API_KEY=$NEBIUS_API_KEY" \
+    ${TAVILY_API_KEY:+--env "TAVILY_API_KEY=$TAVILY_API_KEY"} \
     --env "AUTOFIX_PUBLIC_MODE=1" \
     --env "AUTOFIX_WORKERS=2"
   ENDPOINT_ID=$(nb ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}')

@@ -1,0 +1,1 @@
+{"name": "Python upgrade", "language": "Python", "test_command": "python -m pytest -q", "description": "Release tooling written for an older Python breaks after upgrading to 3.12+: distutils and inspect.getargspec were removed. Uses Tavily web research."}

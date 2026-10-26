@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import re
 import time
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any, Callable
 
 from .config import settings
 from .llm import LLM, parse_json, strip_thinking
+from .research import RESEARCH_CATEGORIES, Research
+from .research import enabled as research_enabled
 from .tools import ToolBox, tool_specs
 from .workspace import Workspace
 
@@ -40,6 +43,7 @@ class FixResult:
     pr: dict[str, Any] = field(default_factory=dict)
     pr_url: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    research: dict[str, Any] = field(default_factory=dict)
     seconds: float = 0.0
 
 
@@ -51,6 +55,10 @@ Respond with ONLY a JSON object with these keys:
   "suspect_files": list of repository file paths most likely to contain the bug (max 5, source files before tests)
   "hypothesis": your best guess at the root cause, in 1-2 sentences
   "difficulty": "easy" or "hard"
+  "search_query": if the fix depends on facts outside this repository (a library or language version change,
+                  a removed or deprecated API, an unfamiliar error message), a concise web search query
+                  (max 12 words) that would find the answer, including the runtime version if relevant;
+                  otherwise null
 """
 
 AGENT_PROMPT = """You are AutoFixAI, an autonomous software engineer that fixes failing CI builds.
@@ -109,6 +117,7 @@ class AutoFixAgent:
     def __init__(self, llm: LLM, emit: Emit):
         self.llm = llm
         self.emit = emit
+        self.web = Research(emit)
 
     # ---------------------------------------------------------------- pipeline
 
@@ -122,7 +131,8 @@ class AutoFixAgent:
         try:
             result = self._run(ws, req)
         finally:
-            result.usage = self.llm.usage_report()
+            result.usage = {**self.llm.usage_report(), "tavily": {"searches": self.web.searches}}
+            result.research = self.web.report()
             result.seconds = round(time.monotonic() - started, 1)
             if result.status != "fixed":
                 ws.cleanup()
@@ -146,6 +156,13 @@ class AutoFixAgent:
         triage = self._triage(ws, failure)
         self.emit("triage", triage)
 
+        # 2b. Web research with Tavily, when the failure depends on facts outside the repo
+        research_text = ""
+        query = self._research_query(triage)
+        if query:
+            self.emit("stage", {"stage": "research", "message": "Tavily is searching the web for context"})
+            research_text = Research.as_text(self.web.search(query, origin="triage"))
+
         escalate_after = settings.escalate_after
         if triage.get("difficulty") == "hard":
             escalate_after = min(escalate_after, 1)
@@ -156,7 +173,7 @@ class AutoFixAgent:
             tier = "super" if attempt <= escalate_after else "ultra"
             self.emit("stage", {"stage": "fix", "attempt": attempt, "tier": tier,
                                 "message": f"Attempt {attempt}: Nemotron {tier.title()} is working on a fix"})
-            outcome = self._attempt(ws, req, tier, failure, triage, lessons)
+            outcome = self._attempt(ws, req, tier, failure, triage, lessons, research_text)
 
             # 4. Independent verification: never trust the agent's own claim
             self.emit("stage", {"stage": "verify", "attempt": attempt, "message": "Verifying fix independently"})
@@ -191,10 +208,12 @@ class AutoFixAgent:
 
     def _triage(self, ws: Workspace, failure: str) -> dict[str, Any]:
         files = "\n".join(ws.list_files(limit=300))
+        runtime = f"Python {platform.python_version()} on {platform.system()}"
         try:
             data = self.llm.chat_json("nano", [
                 {"role": "system", "content": TRIAGE_PROMPT},
-                {"role": "user", "content": f"Repository files:\n{files}\n\nFailing output:\n{failure[-10000:]}"},
+                {"role": "user", "content": f"Runtime: {runtime}\n\nRepository files:\n{files}\n\n"
+                                            f"Failing output:\n{failure[-10000:]}"},
             ], max_tokens=1200, temperature=0.0, thinking=False)
         except Exception as e:
             data = {"summary": "Triage unavailable", "error": str(e)}
@@ -202,9 +221,21 @@ class AutoFixAgent:
         data["suspect_files"] = [f for f in data.get("suspect_files", []) if f in known]
         return data
 
+    @staticmethod
+    def _research_query(triage: dict[str, Any]) -> str | None:
+        """Search only when it can help: Tavily is configured and the failure points outside the repository."""
+        if not research_enabled():
+            return None
+        query = triage.get("search_query")
+        if not isinstance(query, str) or not query.strip():
+            return None
+        if triage.get("category") not in RESEARCH_CATEGORIES:
+            return None
+        return query.strip()[:200]
+
     def _attempt(self, ws: Workspace, req: FixRequest, tier: str, failure: str,
-                 triage: dict[str, Any], lessons: list[str]) -> dict[str, Any]:
-        toolbox = ToolBox(ws, self.emit)
+                 triage: dict[str, Any], lessons: list[str], research_text: str = "") -> dict[str, Any]:
+        toolbox = ToolBox(ws, self.emit, self.web)
         test_rule = ("You MAY edit test files if the test itself is wrong." if req.allow_test_edits else
                      "Do NOT modify test files; the tests define correct behaviour. Fix the source code.")
         user = [
@@ -212,6 +243,9 @@ class AutoFixAgent:
             f"Failing output:\n```\n{failure[-8000:]}\n```",
             f"Triage (from a fast model, may be imperfect):\n```json\n{json.dumps(triage, indent=2)}\n```",
         ]
+        if research_text:
+            user.append("Web research (Tavily) on this failure. Use it if relevant, and prefer the fix it "
+                        "recommends over guessing:\n" + research_text)
         if lessons:
             user.append("Lessons from previous failed attempts (the workspace was reset):\n" + "\n".join(lessons))
         user.append("Begin by reading the most relevant files.")
@@ -295,6 +329,7 @@ class AutoFixAgent:
             "agent_fix_summary": outcome.get("fix_summary"),
             "test_command": test_command,
             "test_result_tail": test_output[-1500:],
+            "web_research": [{"query": f["query"], "summary": f.get("answer")} for f in self.web.findings],
         }
         try:
             pr = self.llm.chat_json("nano", [
@@ -305,6 +340,8 @@ class AutoFixAgent:
             pr = {}
         pr.setdefault("title", "fix: automated CI repair by AutoFixAI")
         pr.setdefault("body", f"## Root cause\n{outcome.get('root_cause')}\n\n## Fix\n{outcome.get('fix_summary')}")
+        if self.web.sources:
+            pr["body"] += "\n\n" + self.web.references_md()
         pr["body"] += ("\n\n---\n\n_Generated by AutoFixAI with NVIDIA Nemotron on Nebius Token Factory. "
                        f"Verified with `{test_command}`._")
         return pr

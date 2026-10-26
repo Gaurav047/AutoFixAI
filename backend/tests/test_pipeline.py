@@ -98,6 +98,69 @@ def test_blocks_test_edits_then_escalates_to_ultra():
     assert llm.calls.count("ultra") == len(GOOD_FIX)
 
 
+def test_tavily_research_feeds_agent_and_pr(monkeypatch):
+    import autofix.agent
+    import autofix.research
+
+    queries = []
+
+    def fake_search(query, max_results=5):
+        queries.append(query)
+        return {"answer": "distutils was removed in Python 3.12; use packaging.version.Version. "
+                          "inspect.getargspec was removed in 3.11; use inspect.getfullargspec.",
+                "results": [{"title": "PEP 632 - Deprecate distutils module",
+                             "url": "https://peps.python.org/pep-0632/", "content": "distutils is removed in 3.12"},
+                            {"title": "What's New In Python 3.11",
+                             "url": "https://docs.python.org/3/whatsnew/3.11.html", "content": "getargspec removed"}]}
+
+    monkeypatch.setattr(autofix.research, "enabled", lambda: True)
+    monkeypatch.setattr(autofix.agent, "research_enabled", lambda: True)
+    monkeypatch.setattr(autofix.research, "tavily_search", fake_search)
+
+    triage = text_msg('{"category": "import_error", "summary": "distutils is gone", "failing_tests": [], '
+                      '"suspect_files": ["relkit/versions.py"], "hypothesis": "removed stdlib APIs", '
+                      '"difficulty": "easy", "search_query": "distutils LooseVersion removed python 3.12 replacement"}')
+    fix = [
+        tool_msg("read_file", path="relkit/versions.py"),
+        tool_msg("web_search", query="inspect.getargspec removed replacement"),
+        tool_msg("edit_file", path="relkit/versions.py", old_text="from distutils.version import LooseVersion",
+                 new_text="from packaging.version import Version as LooseVersion"),
+        tool_msg("edit_file", path="relkit/hooks.py", old_text="inspect.getargspec(hook)",
+                 new_text="inspect.getfullargspec(hook)"),
+        tool_msg("run_tests"),
+        tool_msg("finish", root_cause="stdlib APIs removed", fix_summary="use packaging and getfullargspec"),
+    ]
+    events = []
+    llm = FakeLLM({"nano": [triage, WRITEUP], "super": fix})
+    seen_prompts = []
+    original_chat = llm.chat
+
+    def recording_chat(tier, messages, **kw):
+        seen_prompts.append(messages[1]["content"] if len(messages) > 1 else "")
+        return original_chat(tier, messages, **kw)
+
+    llm.chat = recording_chat
+    result = AutoFixAgent(llm, lambda k, d: events.append((k, d))).run(
+        FixRequest(repo=str(ROOT / "examples" / "python-upgrade"), test_command=TEST_CMD))
+
+    assert result.status == "fixed"
+    assert queries == ["distutils LooseVersion removed python 3.12 replacement", "inspect.getargspec removed replacement"]
+    assert [d["origin"] for k, d in events if k == "research"] == ["triage", "agent"]
+    assert "Web research (Tavily)" in seen_prompts[1]          # first Super call sees the findings
+    assert "## References" in result.pr["body"] and "https://peps.python.org/pep-0632/" in result.pr["body"]
+    assert result.usage["tavily"]["searches"] == 2
+    assert len(result.research["sources"]) == 2               # de-duplicated across both searches
+
+
+def test_no_research_for_logic_bugs(monkeypatch):
+    import autofix.agent
+
+    monkeypatch.setattr(autofix.agent, "research_enabled", lambda: True)
+    assert AutoFixAgent._research_query({"category": "logic_bug", "search_query": "x"}) is None
+    assert AutoFixAgent._research_query({"category": "import_error", "search_query": None}) is None
+    assert AutoFixAgent._research_query({"category": "api_change", "search_query": " q "}) == "q"
+
+
 def test_workspace_rejects_path_escape(tmp_path):
     ws = Workspace(tmp_path, "true")
     with pytest.raises(WorkspaceError):

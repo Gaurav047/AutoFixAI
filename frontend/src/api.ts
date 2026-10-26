@@ -53,7 +53,8 @@ export interface FixResult {
   triage?: Record<string, any>;
   pr?: { title?: string; body?: string };
   pr_url?: string | null;
-  usage?: Record<Tier, TierUsage>;
+  usage?: Record<Tier, TierUsage> & { tavily?: { searches: number } };
+  research?: { searches: number; sources: { url: string; title: string }[] };
   seconds?: number;
   error?: string;
 }

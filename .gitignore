@@ -8,3 +8,8 @@ node_modules/
 frontend/dist/
 *.log
 *.tsbuildinfo
+
+# Local media and exports
+*.mp4
+workPage.png
+docs/*.pdf

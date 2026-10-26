@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-import httpx
-
-from .config import settings
+from . import research
 from .workspace import Workspace, WorkspaceError
 
 
@@ -55,35 +53,19 @@ WEB_SEARCH_SPEC = _fn(
 
 def tool_specs() -> list[dict[str, Any]]:
     specs = list(TOOL_SPECS)
-    if settings.tavily_api_key:
+    if research.enabled():
         specs.insert(-1, WEB_SEARCH_SPEC)
     return specs
-
-
-def tavily_search(query: str, max_results: int = 4) -> str:
-    resp = httpx.post(
-        "https://api.tavily.com/search",
-        headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
-        json={"query": query, "max_results": max_results, "include_answer": True,
-              "search_depth": "basic"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    parts = []
-    if data.get("answer"):
-        parts.append(f"Answer: {data['answer']}")
-    for r in data.get("results", []):
-        parts.append(f"- {r.get('title')} ({r.get('url')})\n  {(r.get('content') or '')[:500]}")
-    return "\n".join(parts) or "No results."
 
 
 class ToolBox:
     """Executes tool calls against a workspace and reports each call to an event sink."""
 
-    def __init__(self, ws: Workspace, emit: Callable[[str, dict[str, Any]], None]):
+    def __init__(self, ws: Workspace, emit: Callable[[str, dict[str, Any]], None],
+                 web: research.Research | None = None):
         self.ws = ws
         self.emit = emit
+        self.web = web
         self.last_test = None
 
     def call(self, name: str, raw_args: str | dict[str, Any] | None) -> str:
@@ -129,7 +111,6 @@ class ToolBox:
                                 "output": res.output[-4000:]})
             status = "PASSED" if res.passed else f"FAILED (exit {res.exit_code})"
             return f"Tests {status}\n\n{res.output}"
-        if name == "web_search":
-            self.emit("tool", {"name": name, "summary": a["query"]})
-            return tavily_search(a["query"])
+        if name == "web_search" and self.web:
+            return research.Research.as_text(self.web.search(a["query"], origin="agent"))
         raise WorkspaceError(f"Unknown tool: {name}")
