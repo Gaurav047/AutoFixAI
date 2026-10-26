@@ -154,7 +154,21 @@ docker build -t autofixai .
 docker run -p 8000:8000 --env-file .env -e AUTOFIX_PUBLIC_MODE=1 autofixai
 ```
 
-To host on **Nebius Serverless Endpoints**, push the image to a registry (for example Nebius Container Registry) and create an endpoint from it. Expose port `8000` and set `NEBIUS_API_KEY` and `AUTOFIX_PUBLIC_MODE=1` as environment variables. Public mode limits the hosted demo to the bundled example repositories, so strangers can't make your server run arbitrary code.
+### Nebius Serverless Endpoints
+
+[`deploy/nebius-deploy.sh`](deploy/nebius-deploy.sh) does the whole deployment in one step:
+
+1. creates a Nebius Container Registry,
+2. builds and pushes the image,
+3. creates a CPU Serverless Endpoint (`cpu-d3`, `4vcpu-16gb`) on port 8000 with `AUTOFIX_PUBLIC_MODE=1`,
+4. prints the public HTTPS URL.
+
+```bash
+# Linux, macOS or WSL, with the Nebius CLI logged in (nebius profile create) and Docker running
+./deploy/nebius-deploy.sh
+```
+
+Public mode limits the hosted demo to the bundled example repositories, so strangers can't make your server run arbitrary code. Re-run the script after code changes to push a new image, then restart the endpoint.
 
 ---
 
