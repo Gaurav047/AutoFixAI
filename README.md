@@ -192,7 +192,7 @@ Re-run the script after code changes to push a new image, then restart the endpo
 
 ### Visitor repositories on a public deployment
 
-With `AUTOFIX_PUBLIC_MODE=1`, visitors can run the demos and also submit **their own public GitHub repository** from the dashboard's *Your repo* tab. Their code runs on your server, so the hosted mode is locked down:
+With `AUTOFIX_PUBLIC_MODE=1` and `AUTOFIX_ALLOW_USER_REPOS=1`, visitors can also submit **their own public GitHub repository** from the dashboard's *Your repo* tab. Their code runs on your server, so this mode is locked down:
 
 | Protection | Detail |
 |---|---|
@@ -203,7 +203,9 @@ With `AUTOFIX_PUBLIC_MODE=1`, visitors can run the demos and also submit **their
 | Cost | `AUTOFIX_RUNS_PER_IP_HOUR` (default 5) per visitor, `AUTOFIX_USER_REPO_RUNS_PER_DAY` (default 40) visitor-repo runs in total, `AUTOFIX_USER_REPO_MAX_ATTEMPTS` (default 2) fix attempts per run, and at most `AUTOFIX_MAX_QUEUED` (default 6) runs waiting. Invalid requests don't count toward the limits. |
 | Output | Never opens a pull request. Visitors download the verified patch and apply it with `git apply`. Workspaces are deleted after every run. |
 
-Known limits: the hosted image includes Python and git but no compilers or other language runtimes, so it suits Python projects with prebuilt wheels. Sandboxed commands still have network access, which `pip install` needs. Set `AUTOFIX_ALLOW_USER_REPOS=0` to restrict a public deployment to the demos only.
+> **Why it's off on the hosted demo:** on Nebius Serverless, the endpoint's VM has a service account attached, and sandboxed commands can reach the cloud metadata service at `169.254.169.254`. Visitor code could therefore obtain that account's access token. The container can't add firewall rules, so the sandbox can't block that address yet. The image ships with `AUTOFIX_ALLOW_USER_REPOS=0`. Only enable it on a host where the sandbox has no route to the metadata service, or where the VM has no service account.
+
+Known limits: the hosted image includes Python and git but no compilers or other language runtimes, so it suits Python projects with prebuilt wheels. Sandboxed commands still have network access, which `pip install` needs.
 
 ---
 
