@@ -21,9 +21,10 @@ COPY --from=web /web/dist frontend/dist
 RUN useradd --system --create-home --shell /usr/sbin/nologin sandbox \
  && mkdir -p /tmp/autofix-runs && chmod 755 /tmp/autofix-runs \
  && chmod -R go-w /app
-# With AUTOFIX_PUBLIC_MODE=1 (set on the hosted endpoint), visitors may submit public GitHub repos;
-# set AUTOFIX_ALLOW_USER_REPOS=0 to restrict a public deployment to the bundled demos.
+# Visitor repos stay off by default: on hosts that attach a cloud service account to the VM, sandboxed code
+# can reach the metadata service (169.254.169.254) and could obtain that account's token. Enable
+# AUTOFIX_ALLOW_USER_REPOS=1 only where the sandbox's network access to the metadata service is blocked.
 ENV PYTHONPATH=/app/backend AUTOFIX_WORK_DIR=/tmp/autofix-runs AUTOFIX_SANDBOX=user \
-    AUTOFIX_ALLOW_USER_REPOS=1 PORT=8000
+    AUTOFIX_ALLOW_USER_REPOS=0 PORT=8000
 EXPOSE 8000
 CMD ["sh", "-c", "exec uvicorn autofix.server:app --host 0.0.0.0 --port ${PORT}"]

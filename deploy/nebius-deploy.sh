@@ -26,8 +26,21 @@ TAVILY_API_KEY=${TAVILY_API_KEY:-$(env_value TAVILY_API_KEY)}
 # Registry and endpoint live in the same project, so the endpoint can pull without credentials.
 nb() { nebius "$@" ${PROJECT_ID:+--parent-id "$PROJECT_ID"}; }
 
+# Look a resource up by name. Prints its ID, or nothing if it doesn't exist; any other error
+# (expired login, network) stops the script rather than being mistaken for "not found".
+find_id() {
+  local out
+  if out=$(nb "$@" --name "$APP" --format jsonpath='{.metadata.id}' 2>&1 </dev/null); then
+    echo "$out"
+  elif ! grep -q "NotFound" <<<"$out"; then
+    echo "Lookup failed: $out" >&2
+    echo "If your login expired, run 'nebius iam whoami' to sign in again, then re-run." >&2
+    exit 1
+  fi
+}
+
 echo "==> Container registry"
-REGISTRY_ID=$(nb registry get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
+REGISTRY_ID=$(find_id registry get-by-name)
 if [ -z "$REGISTRY_ID" ]; then
   REGISTRY_ID=$(nb registry create --name "$APP" --format jsonpath='{.metadata.id}')
 fi
@@ -41,7 +54,7 @@ docker build --platform linux/amd64 -t "$IMAGE" "$ROOT"
 docker push "$IMAGE"
 
 echo "==> Serverless endpoint"
-ENDPOINT_ID=$(nb ai endpoint get-by-name --name "$APP" --format jsonpath='{.metadata.id}' 2>/dev/null || true)
+ENDPOINT_ID=$(find_id ai endpoint get-by-name)
 # Environment variables can't be changed on an existing endpoint, so RECREATE=1 replaces it.
 # The replacement gets a new public URL.
 if [ -n "$ENDPOINT_ID" ] && [ "${RECREATE:-0}" = "1" ]; then
