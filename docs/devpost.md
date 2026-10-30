@@ -9,7 +9,7 @@
 | **Track** | Coding and Agentic Engineering |
 | **Demo URL** | https://port8000-dptwsrmgxt3w28t.tunnel.applications.eu-south1.nebius.cloud |
 | **Code repository** | https://github.com/Gaurav047/AutoFixAI (MIT license) |
-| **Video** | https://youtu.be/lTOj6GO26-8 |
+| **Video** | https://youtu.be/lWEnhblmwc4 |
 | **Existed before the submission period?** | No. Built from an empty repository during the hackathon. |
 | **Built with** | nvidia-nemotron, nebius-token-factory, nebius-serverless-endpoints, nebius-container-registry, python, fastapi, react, typescript, vite, docker, github-actions, openai-sdk, tavily |
 
