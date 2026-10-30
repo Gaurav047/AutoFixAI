@@ -37,8 +37,9 @@ AutoFixAI takes a repository with failing tests and returns a **verified pull re
 6. **Reflect and escalate.** If an attempt is rejected, Nano writes up what went wrong, the workspace is reset to a clean tree, and **Nemotron 3 Ultra** takes the next attempt.
 7. **Ship.** Nano writes a pull request with the root cause, the fix and the verification, plus the sources Tavily found. AutoFixAI opens it on a new `autofix/*` branch.
 
-You can use it four ways:
+You can use it in these ways:
 - a **live dashboard** with a streaming agent timeline, diff viewer and per-model token usage
+- **on your own repo, on the hosted site**: paste a public GitHub URL into the *Your repo* tab, add a test command (and optionally a setup command such as `pip install -r requirements.txt`), and download the verified patch when it's fixed
 - a **CLI** (`python -m autofix fix <repo> --test "pytest -q" --pr`)
 - a **drop-in GitHub Action** that runs whenever CI fails
 - a **GitHub webhook** for a hosted setup
@@ -69,15 +70,22 @@ A typical fix uses about **2k Nano tokens and 17–32k Super tokens, with no Ult
 
 **Guardrails.** The agent should be safe to point at a real repository:
 - Every path is confined to the run's workspace, with no `..` escapes and no `.git` access.
-- The only command the agent can run is the project's test command.
+- The only commands that run are the project's setup and test commands. The model can't run arbitrary shell.
 - **Test files are protected.** Edits to tests are blocked when they're attempted and checked again on the final diff, so the agent can't make CI pass by deleting assertions.
 - A rejected attempt starts again from a clean tree. The next attempt gets only the *lessons* from the last one, not its half-applied edits.
 - AutoFixAI only ever opens PRs, never pushes to your branch, and ignores failures on its own branches so it can't loop.
 
+**Running strangers' code safely.** The *Your repo* tab means anyone on the internet can make the hosted server run their tests. So the hosted mode is locked down:
+- **The keys stay with the server.** The server runs as root and is the only process holding the API keys. Repo code runs as a separate unprivileged `sandbox` user, with memory, process and CPU limits, a minimal environment and its own virtualenv per run. Linux doesn't let another user read a process's environment.
+- **The sandbox's network is fenced off.** At startup the server adds firewall rules for the sandbox user only. DNS is allowed, but the cloud metadata service, private networks and localhost are rejected. The server then verifies the rules by having the sandbox user try to reach the server's own port, which must be refused. The feature turns on only if that check passes, and it re-runs on every restart.
+- **Inputs are restricted.** Only public GitHub repos under 50 MB are accepted, confirmed with the GitHub API. Clones are shallow, with git hooks, submodules and LFS downloads off. Branch names and commands are validated.
+- **Credit use is capped.** Each visitor gets 5 runs an hour, visitor repos have a daily total, each run gets at most 2 fix attempts, and the queue is bounded. Mistyped submissions don't count against the limits.
+- **No pull requests.** The hosted site never opens a PR; visitors download the verified patch and apply it with `git apply`.
+
 **Stack and deployment**
 - **Backend:** Python and FastAPI, with server-sent events for live progress.
 - **Frontend:** React and TypeScript, built with Vite.
-- **Deployment:** a Docker image in **Nebius Container Registry**, served from a **Nebius Serverless Endpoint**, in a public mode that only allows the bundled demo repos.
+- **Deployment:** a Docker image in **Nebius Container Registry**, served from a **Nebius Serverless Endpoint** in a public mode: the bundled demos plus visitors' own public repos, behind the sandbox and network guard.
 - **Tests:** an offline end-to-end suite that drives the *real* pipeline with a scripted stand-in for the models, so it needs no API key.
 
 ## Results
@@ -107,6 +115,8 @@ These removals are well known, so Super fixed the bug even without research. On 
 
 - **Nano returned empty JSON.** Nemotron 3 Nano reasons by default, and the reasoning counts toward `max_tokens`. With a 1500-token cap it spent the whole budget thinking and returned nothing, with `finish_reason=length`. Turning thinking off for Nano's structured calls fixed it: 137 tokens of valid JSON in 1.0 s, down from 6.0 s.
 - **Web research steered the fix the wrong way at first.** Our first prompt told the agent to "prefer the fix the research recommends". Tavily's answer mentioned compatibility workarounds, and Super copied them, keeping the removed `distutils` behind a `try/except` fallback. Rewording the prompt to treat research as background, and to ask for a clean, forward-compatible fix, got the direct fix back.
+- **The cloud metadata service.** Making the *Your repo* tab safe took two tries. The first version isolated the API keys, but security testing found that sandboxed code could still reach the metadata service at `169.254.169.254`, and the endpoint's VM has a Nebius service account attached. Visitor code could likely have obtained that account's access token. We switched the feature off within minutes, then added the firewall rules and the check that confirms they work, and only re-enabled it once that check passed on the live server.
+- **Our own leaks.** Before the sandbox work, test commands inherited the server's environment, keys included. And the settings object printed the API key whenever it showed up in an error message. Both are fixed, and tests cover them.
 - **Trusting the agent.** The agent's own "tests pass" can't be relied on, so verification runs outside it. We also had to stop an agent from making CI pass the easy way, which is why test protection is enforced in two places.
 - **Deployment quota.** Our default Nebius region had no CPU quota at all, and we only found out at the last step of deployment. We added project and region targeting to the deploy script and deployed to a region with capacity.
 - **Real-world model output.** Models wrap JSON in prose and code fences and put raw newlines inside strings, so the parser had to be tolerant of all three.
@@ -115,6 +125,7 @@ These removals are well known, so Super fixed the bug even without research. On 
 
 - **Every fix is checked.** AutoFixAI's output isn't "the model says it's fixed". It's a diff that passed your real test suite on a clean run.
 - **PRs that cite real sources.** When AutoFixAI researched a failure, the PR lists exactly what Tavily retrieved, so a reviewer can check the reasoning instead of trusting it.
+- **Anyone can try it on their own code.** The hosted site runs visitors' repos with the keys out of reach and the cloud metadata service blocked, and it only enables that feature after checking its own firewall works.
 - **Routing across the Nemotron family that clearly pays off.** The expensive model is only paid for when it's needed, and the dashboard shows it.
 - **It goes from an empty folder to deployed** on Nebius Serverless, with a live demo, a CLI, a GitHub Action and a test suite, all within the hackathon.
 
@@ -123,12 +134,13 @@ These removals are well known, so Super fixed the bug even without research. On 
 - **For agents, reasoning control matters as much as model choice.** The same Nano model went from unusable to excellent for structured calls just by turning thinking off.
 - Mid-size models with good tool calling (Nemotron Super) handle most real bugs on their own. The biggest model is best kept for escalation.
 - Guardrails belong **outside** the model: in the tool layer and in independent verification, not in the prompt.
+- **A coding agent's biggest risk is the code it runs, not the code it writes.** Running tests means executing whatever the repo contains. Isolating the API keys wasn't enough; on a cloud VM, the network path to the metadata service matters just as much.
 - **How retrieved context is framed matters as much as what's retrieved.** The same Tavily results produced a worse fix or a clean one, depending only on whether the prompt treated them as instructions or as background.
 
 ## What's next for AutoFixAI
 
-- **More languages and test runners:** JavaScript/TypeScript (Jest, Vitest), Go and Rust.
-- **Per-job container sandboxes** on Nebius Serverless Jobs, so many fixes can run in parallel.
+- **More languages and test runners:** JavaScript/TypeScript (Jest, Vitest), Go and Rust. The hosted *Your repo* tab supports Python only for now.
+- **Per-job container sandboxes** on Nebius Serverless Jobs, so many fixes can run in parallel and each visitor's code gets its own machine. Today, concurrent visitor runs share one sandbox user.
 - **Learning from merged PRs:** feed what reviewers changed back into the triage and reflection prompts.
 - **Flaky-test detection:** re-run before fixing, and label likely flakes instead of "fixing" them.
 - **Research where it changes the outcome:** test on library releases newer than the models' training data, which is where web research should matter most. Rank official docs and changelogs above forum posts.
