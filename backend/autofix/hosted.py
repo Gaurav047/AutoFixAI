@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import threading
 import time
 from collections import defaultdict, deque
@@ -24,7 +25,10 @@ def _int(name: str, default: int) -> int:
         return default
 
 
-ALLOW_USER_REPOS = os.environ.get("AUTOFIX_ALLOW_USER_REPOS") == "1"
+# "1" or "auto": enable visitor repos once the network guard is verified; "0": demos only.
+REQUESTED = os.environ.get("AUTOFIX_ALLOW_USER_REPOS", "0") in ("1", "auto")
+ALLOW_USER_REPOS = False                       # flipped on only by enable_if_safe()
+STATUS_REASON = "checking the sandbox network guard" if REQUESTED else "disabled by configuration"
 MAX_REPO_MB = _int("AUTOFIX_MAX_REPO_MB", 50)
 RUNS_PER_IP_PER_HOUR = _int("AUTOFIX_RUNS_PER_IP_HOUR", 5)
 USER_REPO_RUNS_PER_DAY = _int("AUTOFIX_USER_REPO_RUNS_PER_DAY", 40)
@@ -147,9 +151,42 @@ def client_ip(headers, fallback: str | None) -> str:
     return forwarded.split(",")[0].strip() or fallback or "unknown"
 
 
+def _listening(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(2)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def enable_if_safe(port: int, wait_s: float = 60.0) -> None:
+    """Turn visitor repos on only if the sandbox is isolated from the metadata service and local network.
+
+    Runs in a background thread after startup: the firewall check probes this server's own port, so the
+    server must already be listening (confirmed as root first, as a positive control).
+    """
+    global ALLOW_USER_REPOS, STATUS_REASON
+    from . import netguard
+    from .workspace import SANDBOX_MODE
+
+    if not REQUESTED:
+        return
+    if SANDBOX_MODE != "user":
+        STATUS_REASON = "visitor repos require AUTOFIX_SANDBOX=user (the Docker image)"
+        return
+    deadline = time.time() + wait_s
+    while not _listening(port):
+        if time.time() > deadline:
+            STATUS_REASON = "the server didn't start listening, so the firewall check couldn't run"
+            return
+        time.sleep(0.5)
+    status = netguard.setup(port)
+    ALLOW_USER_REPOS = status.ok
+    STATUS_REASON = status.reason
+
+
 def limits() -> dict:
     return {
         "enabled": ALLOW_USER_REPOS,
+        "reason": STATUS_REASON,
         "max_repo_mb": MAX_REPO_MB,
         "runs_per_hour": RUNS_PER_IP_PER_HOUR,
         "max_attempts": USER_REPO_MAX_ATTEMPTS,

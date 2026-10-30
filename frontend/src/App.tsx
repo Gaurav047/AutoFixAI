@@ -138,7 +138,8 @@ function NewRunPanel({ demos, health, onStart }: { demos: Demo[]; health: Health
     <div className="panel">
       <div className="tabs">
         <button className={tab === "demo" ? "active" : ""} onClick={() => setTab("demo")}>Demo repos</button>
-        <button className={tab === "repo" ? "active" : ""} onClick={() => setTab("repo")} disabled={!repoTab}>
+        <button className={tab === "repo" ? "active" : ""} onClick={() => setTab("repo")} disabled={!repoTab}
+          title={!repoTab && limits?.reason ? `Unavailable on this server: ${limits.reason}` : undefined}>
           Your repo
         </button>
       </div>

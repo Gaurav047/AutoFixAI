@@ -9,7 +9,7 @@ export interface Health {
   base_url: string;
   models?: Record<Tier, string>;
   models_error?: string;
-  user_repos?: { enabled: boolean; max_repo_mb?: number; runs_per_hour?: number; max_attempts?: number };
+  user_repos?: { enabled: boolean; reason?: string; max_repo_mb?: number; runs_per_hour?: number; max_attempts?: number };
 }
 
 export interface Demo {

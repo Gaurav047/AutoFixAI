@@ -8,7 +8,7 @@ RUN npm run build
 
 # ---- runtime ----
 FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git iptables && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
@@ -21,10 +21,10 @@ COPY --from=web /web/dist frontend/dist
 RUN useradd --system --create-home --shell /usr/sbin/nologin sandbox \
  && mkdir -p /tmp/autofix-runs && chmod 755 /tmp/autofix-runs \
  && chmod -R go-w /app
-# Visitor repos stay off by default: on hosts that attach a cloud service account to the VM, sandboxed code
-# can reach the metadata service (169.254.169.254) and could obtain that account's token. Enable
-# AUTOFIX_ALLOW_USER_REPOS=1 only where the sandbox's network access to the metadata service is blocked.
+# Visitor repos (public mode): "auto" enables them only after the server installs firewall rules that keep
+# the sandbox user away from the cloud metadata service (169.254.169.254), private networks and localhost,
+# and verifies them. Where the container can't change the firewall, they stay off. "0" forces demos only.
 ENV PYTHONPATH=/app/backend AUTOFIX_WORK_DIR=/tmp/autofix-runs AUTOFIX_SANDBOX=user \
-    AUTOFIX_ALLOW_USER_REPOS=0 PORT=8000
+    AUTOFIX_ALLOW_USER_REPOS=auto PORT=8000
 EXPOSE 8000
 CMD ["sh", "-c", "exec uvicorn autofix.server:app --host 0.0.0.0 --port ${PORT}"]

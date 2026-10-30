@@ -32,6 +32,13 @@ PUBLIC_MODE = os.environ.get("AUTOFIX_PUBLIC_MODE") == "1"
 DEFAULT_TEST_COMMAND = os.environ.get("AUTOFIX_DEFAULT_TEST_COMMAND", "python -m pytest -q")
 
 app = FastAPI(title="AutoFixAI")
+
+
+@app.on_event("startup")
+def _start_network_guard() -> None:
+    if PUBLIC_MODE:
+        threading.Thread(target=hosted.enable_if_safe, args=(int(os.environ.get("PORT", "8000")),),
+                         daemon=True).start()
 executor = ThreadPoolExecutor(max_workers=int(os.environ.get("AUTOFIX_WORKERS", "2")))
 
 
@@ -149,7 +156,8 @@ def _create_run(body: RunIn, request: Request) -> dict[str, Any]:
         user_repo = not body.demo
         if user_repo:
             if not hosted.ALLOW_USER_REPOS:
-                raise hosted.Rejected(403, "This public instance only runs the bundled demo repositories.")
+                raise hosted.Rejected(403, "This public instance only runs the bundled demo repositories "
+                                           f"({hosted.STATUS_REASON}).")
             visitor_repo = hosted.parse(body.repo, body.ref, body.test_command, body.setup_command, body.ci_log)
         LIMITER.check(hosted.client_ip(request.headers, request.client and request.client.host), user_repo)
         if visitor_repo:

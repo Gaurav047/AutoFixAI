@@ -192,18 +192,19 @@ Re-run the script after code changes to push a new image, then restart the endpo
 
 ### Visitor repositories on a public deployment
 
-With `AUTOFIX_PUBLIC_MODE=1` and `AUTOFIX_ALLOW_USER_REPOS=1`, visitors can also submit **their own public GitHub repository** from the dashboard's *Your repo* tab. Their code runs on your server, so this mode is locked down:
+With `AUTOFIX_PUBLIC_MODE=1`, visitors can also submit **their own public GitHub repository** from the dashboard's *Your repo* tab, once the network guard (below) is verified. Their code runs on your server, so this mode is locked down:
 
 | Protection | Detail |
 |---|---|
 | Inputs | Only `https://github.com/owner/repo` URLs, checked with the GitHub API to be public and under `AUTOFIX_MAX_REPO_MB` (default 50). No local paths. Branch names and commands are validated, and commands are single-line, at most 300 characters. |
 | Clone | Shallow, single branch, no submodules, no LFS downloads, git hooks disabled. |
 | Execution | Setup and test commands run as the unprivileged `sandbox` user via `setpriv --no-new-privs`, with `prlimit` limits on memory, processes, file size and CPU time. They get a minimal environment and a per-run virtualenv. `.git` is root-only, and the app code is read-only. |
+| Network | At startup the server installs firewall rules for the `sandbox` user only. They allow DNS, then reject link-local addresses (including the cloud metadata service at `169.254.169.254`), private ranges and localhost. The server then checks them by having the sandbox user try to connect to the server's own port, which must be refused. Visitor repos turn on only if the rules applied and that check passed. Internet access stays open, so `pip install` works. |
 | Secrets | The API keys exist only in the root server process. Linux doesn't let another user read a process's environment, which we verified by running hostile commands in the sandbox. Settings never print secrets. |
 | Cost | `AUTOFIX_RUNS_PER_IP_HOUR` (default 5) per visitor, `AUTOFIX_USER_REPO_RUNS_PER_DAY` (default 40) visitor-repo runs in total, `AUTOFIX_USER_REPO_MAX_ATTEMPTS` (default 2) fix attempts per run, and at most `AUTOFIX_MAX_QUEUED` (default 6) runs waiting. Invalid requests don't count toward the limits. |
 | Output | Never opens a pull request. Visitors download the verified patch and apply it with `git apply`. Workspaces are deleted after every run. |
 
-> **Why it's off on the hosted demo:** on Nebius Serverless, the endpoint's VM has a service account attached, and sandboxed commands can reach the cloud metadata service at `169.254.169.254`. Visitor code could therefore obtain that account's access token. The container can't add firewall rules, so the sandbox can't block that address yet. The image ships with `AUTOFIX_ALLOW_USER_REPOS=0`. Only enable it on a host where the sandbox has no route to the metadata service, or where the VM has no service account.
+> **Why the network guard matters:** on Nebius Serverless the endpoint's VM has a service account attached. Without the guard, sandboxed code could reach the cloud metadata service at `169.254.169.254` and obtain that account's access token. Installing the rules needs the `NET_ADMIN` capability. Where the container doesn't have it, visitor repos stay off and the dashboard shows why. The image default is `AUTOFIX_ALLOW_USER_REPOS=auto`. Set it to `0` to force demos only.
 
 Known limits: the hosted image includes Python and git but no compilers or other language runtimes, so it suits Python projects with prebuilt wheels. Sandboxed commands still have network access, which `pip install` needs.
 
@@ -218,6 +219,7 @@ backend/autofix/
   tools.py       Function-calling tool specs + dispatcher
   research.py    Tavily web research: search client, per-run source collection, PR references
   hosted.py      Public-deployment protections: visitor-repo validation, GitHub checks, rate limits
+  netguard.py    Firewall rules that keep sandboxed code off the metadata service, private networks and localhost
   workspace.py   Isolated workspace: path jail, edits, test runner, git diff/reset
   github.py      Branch, push, PR creation, failed-job log retrieval
   server.py      FastAPI: runs API, SSE event stream, GitHub webhook, serves the dashboard
