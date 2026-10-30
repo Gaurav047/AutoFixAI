@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import hosted
 from .agent import AutoFixAgent, FixRequest
 from .config import settings
 from .llm import LLM
@@ -57,6 +58,7 @@ class Run:
 
 
 RUNS: dict[str, Run] = {}
+LIMITER = hosted.RateLimiter()
 
 
 def _execute(run: Run) -> None:
@@ -76,6 +78,9 @@ def _execute(run: Run) -> None:
 def start_run(req: FixRequest, source: str) -> Run:
     run = Run(req, source)
     RUNS[run.id] = run
+    for old in sorted(RUNS.values(), key=lambda r: r.created)[:-200]:  # keep memory bounded
+        if old.status == "completed":
+            RUNS.pop(old.id, None)
     executor.submit(_execute, run)
     return run
 
@@ -101,6 +106,7 @@ class RunIn(BaseModel):
     ci_log: str | None = None
     allow_test_edits: bool = False
     open_pr: bool = False
+    setup_command: str | None = None
 
 
 @app.get("/api/health")
@@ -112,6 +118,7 @@ def health() -> dict[str, Any]:
         "github_configured": bool(settings.github_token),
         "tavily_configured": bool(settings.tavily_api_key),
         "base_url": settings.base_url,
+        "user_repos": hosted.limits() if PUBLIC_MODE else {"enabled": True},
     }
     if settings.api_key:
         try:
@@ -127,7 +134,27 @@ def demos() -> list[dict[str, Any]]:
 
 
 @app.post("/api/runs")
-def create_run(body: RunIn) -> dict[str, Any]:
+def create_run(body: RunIn, request: Request) -> dict[str, Any]:
+    try:
+        return _create_run(body, request)
+    except hosted.Rejected as e:
+        raise HTTPException(e.status, e.message)
+
+
+def _create_run(body: RunIn, request: Request) -> dict[str, Any]:
+    visitor_repo = None
+    if PUBLIC_MODE:
+        if sum(1 for r in RUNS.values() if r.status != "completed") >= hosted.MAX_QUEUED:
+            raise hosted.Rejected(503, "The hosted demo is busy. Try again in a minute.")
+        user_repo = not body.demo
+        if user_repo:
+            if not hosted.ALLOW_USER_REPOS:
+                raise hosted.Rejected(403, "This public instance only runs the bundled demo repositories.")
+            visitor_repo = hosted.parse(body.repo, body.ref, body.test_command, body.setup_command, body.ci_log)
+        LIMITER.check(hosted.client_ip(request.headers, request.client and request.client.host), user_repo)
+        if visitor_repo:
+            hosted.check_remote(visitor_repo)
+
     if body.demo:
         demo = next((d for d in list_demos() if d["id"] == body.demo), None)
         if not demo:
@@ -137,11 +164,18 @@ def create_run(body: RunIn) -> dict[str, Any]:
         return start_run(req, "demo").summary()
 
     if PUBLIC_MODE:
-        raise HTTPException(403, "This public instance only runs the bundled demo repositories.")
+        # Visitor repo: public GitHub only, validated, sandboxed, no PRs, capped attempts.
+        repo = visitor_repo
+        req = FixRequest(repo=repo.url, ref=repo.ref, test_command=repo.test_command,
+                         setup_command=repo.setup_command, ci_log=repo.ci_log,
+                         allow_test_edits=body.allow_test_edits, open_pr=False,
+                         max_attempts=hosted.USER_REPO_MAX_ATTEMPTS)
+        return start_run(req, "visitor").summary()
+
     if not body.repo:
         raise HTTPException(400, "Provide a repo (git URL or local path) or a demo id")
     req = FixRequest(repo=body.repo, test_command=body.test_command or DEFAULT_TEST_COMMAND,
-                     ref=body.ref or None, ci_log=body.ci_log or None,
+                     ref=body.ref or None, ci_log=body.ci_log or None, setup_command=body.setup_command or None,
                      allow_test_edits=body.allow_test_edits, open_pr=body.open_pr)
     return start_run(req, "manual").summary()
 

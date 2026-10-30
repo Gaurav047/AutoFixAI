@@ -15,8 +15,15 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend/ backend/
 COPY examples/ examples/
 COPY --from=web /web/dist frontend/dist
-RUN useradd -m autofix && chown -R autofix /app
-USER autofix
-ENV PYTHONPATH=/app/backend AUTOFIX_WORK_DIR=/tmp/autofix-runs PORT=8000
+
+# Two users. The server runs as root and is the only process holding the API keys. Repository code
+# (setup and test commands) runs as the unprivileged `sandbox` user, which can't read root's environment.
+RUN useradd --system --create-home --shell /usr/sbin/nologin sandbox \
+ && mkdir -p /tmp/autofix-runs && chmod 755 /tmp/autofix-runs \
+ && chmod -R go-w /app
+# With AUTOFIX_PUBLIC_MODE=1 (set on the hosted endpoint), visitors may submit public GitHub repos;
+# set AUTOFIX_ALLOW_USER_REPOS=0 to restrict a public deployment to the bundled demos.
+ENV PYTHONPATH=/app/backend AUTOFIX_WORK_DIR=/tmp/autofix-runs AUTOFIX_SANDBOX=user \
+    AUTOFIX_ALLOW_USER_REPOS=1 PORT=8000
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn autofix.server:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "exec uvicorn autofix.server:app --host 0.0.0.0 --port ${PORT}"]

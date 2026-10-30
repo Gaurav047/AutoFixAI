@@ -24,7 +24,7 @@ def _int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     # Nebius Token Factory (OpenAI-compatible)
-    api_key: str = field(default_factory=lambda: os.environ.get("NEBIUS_API_KEY", ""))
+    api_key: str = field(default_factory=lambda: os.environ.get("NEBIUS_API_KEY", ""), repr=False)
     base_url: str = field(
         default_factory=lambda: os.environ.get(
             "NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1"
@@ -41,13 +41,14 @@ class Settings:
     max_steps_per_attempt: int = field(default_factory=lambda: _int("AUTOFIX_MAX_STEPS", 14))
     escalate_after: int = field(default_factory=lambda: _int("AUTOFIX_ESCALATE_AFTER", 2))
     test_timeout_s: int = field(default_factory=lambda: _int("AUTOFIX_TEST_TIMEOUT", 180))
+    setup_timeout_s: int = field(default_factory=lambda: _int("AUTOFIX_SETUP_TIMEOUT", 600))
 
     # Optional integrations
-    github_token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
+    github_token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""), repr=False)
     github_webhook_secret: str = field(
-        default_factory=lambda: os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+        default_factory=lambda: os.environ.get("GITHUB_WEBHOOK_SECRET", ""), repr=False
     )
-    tavily_api_key: str = field(default_factory=lambda: os.environ.get("TAVILY_API_KEY", ""))
+    tavily_api_key: str = field(default_factory=lambda: os.environ.get("TAVILY_API_KEY", ""), repr=False)
 
     # Where run workspaces are created
     work_dir: Path = field(

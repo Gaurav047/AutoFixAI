@@ -115,7 +115,10 @@ function Welcome({ health }: { health: Health | null }) {
 
 function NewRunPanel({ demos, health, onStart }: { demos: Demo[]; health: Health | null; onStart: (b: NewRun) => Promise<void> }) {
   const [tab, setTab] = useState<"demo" | "repo">("demo");
-  const [form, setForm] = useState({ repo: "", ref: "", test_command: "python -m pytest -q", ci_log: "", open_pr: false });
+  const [form, setForm] = useState({ repo: "", ref: "", setup_command: "", test_command: "python -m pytest -q", ci_log: "", open_pr: false });
+  const hosted = !!health?.public_mode;
+  const repoTab = health?.user_repos?.enabled ?? !hosted;
+  const limits = health?.user_repos;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,7 +138,7 @@ function NewRunPanel({ demos, health, onStart }: { demos: Demo[]; health: Health
     <div className="panel">
       <div className="tabs">
         <button className={tab === "demo" ? "active" : ""} onClick={() => setTab("demo")}>Demo repos</button>
-        <button className={tab === "repo" ? "active" : ""} onClick={() => setTab("repo")} disabled={health?.public_mode}>
+        <button className={tab === "repo" ? "active" : ""} onClick={() => setTab("repo")} disabled={!repoTab}>
           Your repo
         </button>
       </div>
@@ -153,19 +156,32 @@ function NewRunPanel({ demos, health, onStart }: { demos: Demo[]; health: Health
           className="repo-form"
           onSubmit={(e) => {
             e.preventDefault();
-            go({ ...form, ref: form.ref || undefined, ci_log: form.ci_log || undefined });
+            go({ ...form, ref: form.ref || undefined, ci_log: form.ci_log || undefined,
+                 setup_command: form.setup_command || undefined, open_pr: hosted ? false : form.open_pr });
           }}
         >
-          <label>Repository<input required placeholder="https://github.com/org/repo or local path" value={form.repo} onChange={(e) => setForm({ ...form, repo: e.target.value })} /></label>
+          <label>Repository<input required placeholder={hosted ? "https://github.com/owner/repo" : "https://github.com/org/repo or local path"}
+            value={form.repo} onChange={(e) => setForm({ ...form, repo: e.target.value })} /></label>
           <div className="row">
             <label>Branch<input placeholder="default" value={form.ref} onChange={(e) => setForm({ ...form, ref: e.target.value })} /></label>
             <label>Test command<input required value={form.test_command} onChange={(e) => setForm({ ...form, test_command: e.target.value })} /></label>
           </div>
+          <label>Setup command <span className="opt">(optional, runs once)</span>
+            <input placeholder="pip install -r requirements.txt" value={form.setup_command} onChange={(e) => setForm({ ...form, setup_command: e.target.value })} /></label>
           <label>Failing CI log <span className="opt">(optional)</span><textarea rows={3} value={form.ci_log} onChange={(e) => setForm({ ...form, ci_log: e.target.value })} /></label>
-          <label className="check">
-            <input type="checkbox" checked={form.open_pr} disabled={!health?.github_configured} onChange={(e) => setForm({ ...form, open_pr: e.target.checked })} />
-            Open a pull request when fixed
-          </label>
+          {hosted ? (
+            <p className="note">
+              Public GitHub repos up to {limits?.max_repo_mb ?? 50} MB, Python only. Your code runs in an
+              isolated sandbox without access to this server's keys. This hosted demo doesn't open pull
+              requests; you can download the verified patch instead. Limit: {limits?.runs_per_hour ?? 5} runs
+              per hour, {limits?.max_attempts ?? 2} fix attempts per run.
+            </p>
+          ) : (
+            <label className="check">
+              <input type="checkbox" checked={form.open_pr} disabled={!health?.github_configured} onChange={(e) => setForm({ ...form, open_pr: e.target.checked })} />
+              Open a pull request when fixed
+            </label>
+          )}
           <button className="primary" disabled={busy}>{busy ? "Starting…" : "Fix it"}</button>
         </form>
       )}
@@ -268,6 +284,7 @@ function RunView({ runId }: { runId: string }) {
 
           {diff && (
             <Card title="Verified patch" badge={<span className="tag ok">tests passing</span>}>
+              <PatchActions diff={diff} name={runId} />
               <DiffView diff={diff} />
             </Card>
           )}
@@ -334,7 +351,8 @@ function derive(events: RunEvent[]) {
 
 function Stepper({ stage, finished, status }: { stage: string; finished: boolean; status?: string }) {
   // Research happens between triage and fix; show it as part of the triage step.
-  const idx = STAGES.findIndex((s) => s.id === (stage === "research" ? "triage" : stage));
+  const alias: Record<string, string> = { research: "triage", install: "reproduce", setup: "reproduce" };
+  const idx = STAGES.findIndex((s) => s.id === (alias[stage] ?? stage));
   return (
     <ol className="stepper">
       {STAGES.map((s, i) => {
@@ -418,7 +436,7 @@ function TimelineItem({ e }: { e: RunEvent }) {
       return (
         <li className={`ev tests ${e.passed ? "pass" : "fail"}`}>{time}
           <span className={`tag ${e.passed ? "ok" : "bad"}`}>{e.passed ? "PASS" : "FAIL"}</span>
-          {e.baseline ? "Baseline test run" : e.verification ? "Independent verification" : "Agent ran tests"}
+          {e.setup ? "Setup command" : e.baseline ? "Baseline test run" : e.verification ? "Independent verification" : "Agent ran tests"}
           <details><summary>output</summary><pre className="out">{e.output}</pre></details>
         </li>
       );
@@ -437,6 +455,32 @@ function TimelineItem({ e }: { e: RunEvent }) {
     default:
       return null;
   }
+}
+
+function PatchActions({ diff, name }: { diff: string; name: string }) {
+  const [copied, setCopied] = useState(false);
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([diff], { type: "text/x-diff" }));
+    const a = Object.assign(document.createElement("a"), { href: url, download: `autofix-${name}.patch` });
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(diff);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable: the download still works */
+    }
+  };
+  return (
+    <div className="patch-actions">
+      <button onClick={download}>Download .patch</button>
+      <button onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+      <span className="muted small">Apply with <code>git apply autofix-{name}.patch</code></span>
+    </div>
+  );
 }
 
 function miniDiff(oldText: string, newText: string) {

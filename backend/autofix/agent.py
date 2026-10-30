@@ -30,6 +30,8 @@ class FixRequest:
     ci_log: str | None = None       # optional failing CI log, if the caller has one
     allow_test_edits: bool = False  # by default the agent may not touch tests
     open_pr: bool = False
+    setup_command: str | None = None  # run once before testing, e.g. "pip install -r requirements.txt"
+    max_attempts: int | None = None   # overrides AUTOFIX_MAX_ATTEMPTS (the hosted site caps this)
 
 
 @dataclass
@@ -44,6 +46,7 @@ class FixResult:
     pr_url: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
     seconds: float = 0.0
 
 
@@ -134,11 +137,20 @@ class AutoFixAgent:
             result.usage = {**self.llm.usage_report(), "tavily": {"searches": self.web.searches}}
             result.research = self.web.report()
             result.seconds = round(time.monotonic() - started, 1)
-            if result.status != "fixed":
-                ws.cleanup()
+            ws.cleanup()  # the diff and PR (if any) are already captured
         return result
 
     def _run(self, ws: Workspace, req: FixRequest) -> FixResult:
+        # 0. Install dependencies, if the caller gave a setup command
+        if req.setup_command:
+            self.emit("stage", {"stage": "install", "message": f"Installing dependencies: `{req.setup_command}`"})
+            setup = ws.run_command(req.setup_command, settings.setup_timeout_s)
+            self.emit("tests", {"passed": setup.passed, "exit_code": setup.exit_code,
+                                "output": setup.output[-4000:], "setup": True})
+            if not setup.passed:
+                self.emit("stage", {"stage": "done", "message": "The setup command failed, so the tests can't run"})
+                return FixResult(status="error", error="The setup command failed. Check its output in the timeline.")
+
         # 1. Reproduce
         self.emit("stage", {"stage": "reproduce", "message": f"Running `{req.test_command}`"})
         baseline = ws.run_tests()
@@ -169,7 +181,10 @@ class AutoFixAgent:
 
         # 3. Fix loop with Super, escalating to Ultra
         lessons: list[str] = []
-        for attempt in range(1, settings.max_attempts + 1):
+        max_attempts = req.max_attempts or settings.max_attempts
+        if max_attempts > 1:
+            escalate_after = min(escalate_after, max_attempts - 1)  # the last attempt can always use Ultra
+        for attempt in range(1, max_attempts + 1):
             tier = "super" if attempt <= escalate_after else "ultra"
             self.emit("stage", {"stage": "fix", "attempt": attempt, "tier": tier,
                                 "message": f"Attempt {attempt}: Nemotron {tier.title()} is working on a fix"})
@@ -202,7 +217,7 @@ class AutoFixAgent:
             ws.reset()
 
         self.emit("stage", {"stage": "done", "message": "Could not produce a verified fix"})
-        return FixResult(status="failed", attempts=settings.max_attempts, triage=triage)
+        return FixResult(status="failed", attempts=max_attempts, triage=triage)
 
     # ---------------------------------------------------------------- steps
 

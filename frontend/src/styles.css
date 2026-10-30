@@ -113,6 +113,12 @@ a { color: var(--accent); }
 .repo-form input:focus, .repo-form textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .repo-form .check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
 .opt { color: var(--muted); font-weight: 400; }
+.note { margin: 0; font-size: 12px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; }
+.patch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.patch-actions button { border: 1px solid var(--border); background: var(--surface-2); border-radius: 7px;
+  padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
+.patch-actions button:hover { border-color: var(--accent); }
 .primary {
   background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 9px; font-weight: 600; cursor: pointer;
 }

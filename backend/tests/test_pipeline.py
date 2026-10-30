@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import pytest
 
-os.environ["AUTOFIX_ESCALATE_AFTER"] = "1"
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
@@ -21,6 +20,15 @@ from autofix.workspace import Workspace, WorkspaceError  # noqa: E402
 
 EXAMPLE = ROOT / "examples" / "inventory-refactor"
 TEST_CMD = f'"{sys.executable}" -m pytest -q -p no:cacheprovider'
+
+
+@pytest.fixture(autouse=True)
+def escalate_after_one():
+    """Escalate to Ultra after one failed Super attempt (settings is frozen, so patch it directly)."""
+    previous = settings.escalate_after
+    object.__setattr__(settings, "escalate_after", 1)
+    yield
+    object.__setattr__(settings, "escalate_after", previous)
 
 
 def tool_msg(name: str, **args):

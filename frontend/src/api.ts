@@ -9,6 +9,7 @@ export interface Health {
   base_url: string;
   models?: Record<Tier, string>;
   models_error?: string;
+  user_repos?: { enabled: boolean; max_repo_mb?: number; runs_per_hour?: number; max_attempts?: number };
 }
 
 export interface Demo {
@@ -63,6 +64,7 @@ export interface NewRun {
   demo?: string;
   repo?: string;
   test_command?: string;
+  setup_command?: string;
   ref?: string;
   ci_log?: string;
   open_pr?: boolean;
